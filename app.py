@@ -92,7 +92,7 @@ def scrape_swift():
     return results
 
 def get_all_data():
-    return pd.DataFrame(scrape_ecb() + scrape_fed() + scrape_swift())
+    return pd.DataFrame(scrape_ecb() + scrape_fed())
 
 # --- UI ---
 st.set_page_config(page_title="PaymentsRegIQ", layout="wide")
