@@ -1,7 +1,9 @@
 import streamlit as st
 import feedparser
+from bs4 import BeautifulSoup
 from datetime import datetime
 import pandas as pd
+import re
 
 # RSS feeds from regulatory bodies
 RSS_FEEDS = {
@@ -11,7 +13,6 @@ RSS_FEEDS = {
     "MAS": "https://www.mas.gov.sg/rss/NewsReleases.xml"
 }
 
-# NLP classifier for payment regulation topics
 def classify_regulation(title, summary):
     text = (title + " " + summary).lower()
     if "iso 20022" in text or "structured" in text:
@@ -29,7 +30,10 @@ def classify_regulation(title, summary):
     else:
         return "Other"
 
-# Parse feeds and structure them
+def extract_deadline(text):
+    matches = re.findall(r"\b(?:by|before|until)?\s*(\d{4}-\d{2}-\d{2})\b", text)
+    return matches[0] if matches else "N/A"
+
 def parse_all_feeds():
     records = []
     for jurisdiction, url in RSS_FEEDS.items():
@@ -38,38 +42,43 @@ def parse_all_feeds():
             title = entry.get("title", "No title")
             link = entry.get("link", "#")
             published = entry.get("published", "")
-            summary = entry.get("summary", "")
+            raw_summary = entry.get("summary", "")
+
+            clean_summary = BeautifulSoup(raw_summary, "html.parser").get_text()
+            short_summary = clean_summary[:300] + "..." if len(clean_summary) > 300 else clean_summary
+            deadline = extract_deadline(clean_summary)
 
             try:
                 pub_date = datetime.strptime(published, "%a, %d %b %Y %H:%M:%S %Z")
-                published = pub_date.strftime("%Y-%m-%d")
+                pub_date_str = pub_date.strftime("%Y-%m-%d")
             except:
-                pass
+                pub_date_str = "N/A"
 
-            topic = classify_regulation(title, summary)
+            topic = classify_regulation(title, clean_summary)
+
             records.append({
                 "Jurisdiction": jurisdiction,
                 "Title": title,
                 "Regulatory Type": topic,
-                "Published Date": published,
-                "Summary": summary[:300] + "..." if len(summary) > 300 else summary,
+                "Published Date": pub_date_str,
+                "Deadline": deadline,
+                "Summary": short_summary,
                 "Link": link
             })
     return pd.DataFrame(records)
 
-# Streamlit UI
+# UI
 st.set_page_config(page_title="PaymentsRegIQ", layout="wide")
-st.title("🌐 PaymentsRegIQ – Structured Regulatory Feed")
+st.title("📡 PaymentsRegIQ – Structured Regulatory Feed")
 
 df = parse_all_feeds()
-
 if df.empty:
-    st.warning("⚠️ No entries found. Check feed URLs or parsing logic.")
+    st.warning("⚠️ No data found.")
     st.stop()
 
 # Filters
 jurisdictions = st.sidebar.multiselect("Jurisdiction", df["Jurisdiction"].unique(), default=list(df["Jurisdiction"].unique()))
-topics = st.sidebar.multiselect("Regulatory Type", df["Regulatory Type"].unique(), default=list(df["Regulatory Type"].unique()))
-filtered_df = df[df["Jurisdiction"].isin(jurisdictions) & df["Regulatory Type"].isin(topics)]
+types = st.sidebar.multiselect("Regulatory Type", df["Regulatory Type"].unique(), default=list(df["Regulatory Type"].unique()))
+filtered = df[df["Jurisdiction"].isin(jurisdictions) & df["Regulatory Type"].isin(types)]
 
-st.dataframe(filtered_df, use_container_width=True)
+st.dataframe(filtered, use_container_width=True)
