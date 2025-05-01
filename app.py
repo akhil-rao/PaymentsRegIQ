@@ -2,113 +2,105 @@ import streamlit as st
 import feedparser
 import pandas as pd
 from datetime import datetime
-import re
+import requests
+from bs4 import BeautifulSoup
 import openai
-from urllib.parse import urlparse
 
-# Load API key from secrets
+# ✅ Load OpenAI API key securely
 openai.api_key = st.secrets["OPENAI_API_KEY"]
 
-# Keywords for monitoring
-KEYWORDS = [
-    "CBDC",
-    "Central Bank Digital Currency",
-    "Sanctions",
-    "Stablecoin",
-    "Payments",
-    "ISO 20022",
-    "AML",
-    "KYC"
-]
+# ✅ Trusted regulatory RSS feeds
+RSS_FEEDS = {
+    "BIS": "https://www.bis.org/doclist/all_pressrels.rss",
+    "MAS": "https://www.mas.gov.sg/rss/NewsReleases.xml",
+    "Fed": "https://www.federalreserve.gov/feeds/press_all.xml"
+}
 
-# Classify the regulatory type
+# ✅ Payment-related keywords
+KEYWORDS = ["CBDC", "ISO 20022", "Sanctions", "Stablecoin", "Payments", "AML", "KYC"]
+
+# ✅ Regulatory classifier
 def classify_topic(text):
     t = text.lower()
-    if "iso 20022" in t or "structured" in t:
-        return "ISO 20022"
-    elif "cbdc" in t or "central bank digital currency" in t:
-        return "CBDC"
-    elif "stablecoin" in t:
-        return "Stablecoin"
-    elif "aml" in t or "kyc" in t:
-        return "AML/KYC"
-    elif "sanction" in t:
-        return "Sanctions"
-    elif "payment" in t:
-        return "Payments"
-    else:
-        return "Other"
+    if "iso 20022" in t: return "ISO 20022"
+    if "cbdc" in t or "central bank digital currency" in t: return "CBDC"
+    if "stablecoin" in t: return "Stablecoin"
+    if "aml" in t or "kyc" in t: return "AML/KYC"
+    if "sanction" in t: return "Sanctions"
+    if "payment" in t: return "Payments"
+    return "Other"
 
-# Use GPT to summarize the content
-def simplify_summary(summary):
-    prompt = f"Summarize the following regulatory news content in one clear sentence for financial compliance professionals:\n\n{summary}\n\nSummary:"
+# ✅ Article body fetcher
+def fetch_article_content(url):
+    try:
+        headers = {"User-Agent": "Mozilla/5.0"}
+        html = requests.get(url, headers=headers, timeout=5)
+        soup = BeautifulSoup(html.content, "html.parser")
+        text = " ".join(p.get_text() for p in soup.find_all("p"))
+        return text if len(text) > 200 else ""
+    except:
+        return ""
+
+# ✅ GPT structuring
+def gpt_extract(entry_text):
+    prompt = f"""
+You're a regulatory analyst. Extract the following structured information:
+
+Text:
+{entry_text[:4000]}
+
+Return in this format:
+Title:
+Jurisdiction:
+Published Date:
+Deadline (if any):
+Regulatory Type:
+Summary (2–3 lines):
+"""
     try:
         response = openai.ChatCompletion.create(
             model="gpt-3.5-turbo",
             messages=[{"role": "user", "content": prompt}],
-            temperature=0.3
+            temperature=0.2
         )
         return response['choices'][0]['message']['content'].strip()
-    except Exception:
-        return summary
+    except Exception as e:
+        return "GPT parse failed."
 
-# Extract domain name
-def extract_domain(url):
-    try:
-        return urlparse(url).netloc.replace('www.', '')
-    except:
-        return "Unknown"
+# ✅ Streamlit UI
+st.set_page_config(page_title="PaymentsRegIQ", layout="wide")
+st.title("📡 PaymentsRegIQ – Structured Regulatory Feed")
 
-# Parse RSS feed from Google News
-def get_alerts_from_google_news(keyword):
-    feed_url = f"https://news.google.com/rss/search?q={keyword.replace(' ', '%20')}"
-    feed = feedparser.parse(feed_url)
-    entries = []
-    for entry in feed.entries:
-        title = entry.get("title", "")
-        link = entry.get("link", "")
-        summary = entry.get("summary", "")
-        published = entry.get("published", "")
-        pub_date = ""
-        try:
-            pub_date = datetime.strptime(published, "%a, %d %b %Y %H:%M:%S %Z").strftime("%Y-%m-%d")
-        except:
-            pub_date = published
-
-        topic = classify_topic(title + " " + summary)
-        clean_summary = simplify_summary(summary)
-        domain = extract_domain(link)
-
-        entries.append({
-            "Keyword": keyword,
-            "Title": title,
-            "Regulatory Type": topic,
-            "Published Date": pub_date,
-            "Summary": clean_summary,
-            "Link": link,
-            "Source": domain,
-            "Jurisdiction": "Unknown"
-        })
-    return entries
-
-# Streamlit UI
-st.set_page_config(page_title="PaymentsRegIQ - AI Regulatory Feed", layout="wide")
-st.title("📡 PaymentsRegIQ – Real-Time AI-Powered Regulatory Feed")
-
-# Fetch alerts
-with st.spinner("Fetching and analyzing alerts..."):
-    all_entries = []
-    for kw in KEYWORDS:
-        all_entries.extend(get_alerts_from_google_news(kw))
+all_entries = []
+with st.spinner("Fetching and analyzing authoritative sources..."):
+    for jurisdiction, url in RSS_FEEDS.items():
+        feed = feedparser.parse(url)
+        for entry in feed.entries:
+            title = entry.get("title", "")
+            summary = entry.get("summary", "")
+            link = entry.get("link", "")
+            published = entry.get("published", "")
+            text = fetch_article_content(link) or summary
+            if not any(k.lower() in (title + summary + text).lower() for k in KEYWORDS):
+                continue
+            topic = classify_topic(title + " " + text)
+            structured = gpt_extract(title + "\n" + text)
+            all_entries.append({
+                "Jurisdiction": jurisdiction,
+                "Title": title,
+                "Regulatory Type": topic,
+                "Published Date": published,
+                "Structured Summary": structured,
+                "Link": link
+            })
 
 df = pd.DataFrame(all_entries).drop_duplicates(subset=["Title", "Link"])
 
-# UI Filters
-st.sidebar.header("Filters")
-selected_types = st.sidebar.multiselect("Regulatory Type", sorted(df["Regulatory Type"].unique()), default=list(df["Regulatory Type"].unique()))
-selected_sources = st.sidebar.multiselect("Source", sorted(df["Source"].unique()), default=list(df["Source"].unique()))
+# ✅ Filters
+st.sidebar.header("🔎 Filters")
+types = st.sidebar.multiselect("Regulatory Type", df["Regulatory Type"].unique(), default=list(df["Regulatory Type"].unique()))
+juris = st.sidebar.multiselect("Jurisdiction", df["Jurisdiction"].unique(), default=list(df["Jurisdiction"].unique()))
+filtered = df[df["Regulatory Type"].isin(types) & df["Jurisdiction"].isin(juris)]
 
-filtered_df = df[df["Regulatory Type"].isin(selected_types) & df["Source"].isin(selected_sources)]
-
-st.markdown(f"#### Results: {len(filtered_df)} entries")
-st.dataframe(filtered_df, use_container_width=True)
+st.markdown(f"### {len(filtered)} regulatory updates found")
+st.dataframe(filtered, use_container_width=True)
