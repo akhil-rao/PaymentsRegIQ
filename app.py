@@ -6,20 +6,20 @@ import requests
 from bs4 import BeautifulSoup
 import openai
 
-# ✅ Load OpenAI API key securely
+# ✅ Secure OpenAI Key from Streamlit Secrets
 openai.api_key = st.secrets["OPENAI_API_KEY"]
 
-# ✅ Trusted regulatory RSS feeds
+# ✅ Authoritative Regulatory Feeds
 RSS_FEEDS = {
     "BIS": "https://www.bis.org/doclist/all_pressrels.rss",
     "MAS": "https://www.mas.gov.sg/rss/NewsReleases.xml",
     "Fed": "https://www.federalreserve.gov/feeds/press_all.xml"
 }
 
-# ✅ Payment-related keywords
+# ✅ Keywords to Match
 KEYWORDS = ["CBDC", "ISO 20022", "Sanctions", "Stablecoin", "Payments", "AML", "KYC"]
 
-# ✅ Regulatory classifier
+# ✅ Classifier
 def classify_topic(text):
     t = text.lower()
     if "iso 20022" in t: return "ISO 20022"
@@ -30,7 +30,7 @@ def classify_topic(text):
     if "payment" in t: return "Payments"
     return "Other"
 
-# ✅ Article body fetcher
+# ✅ Fetch Article Body (fallback to summary)
 def fetch_article_content(url):
     try:
         headers = {"User-Agent": "Mozilla/5.0"}
@@ -41,15 +41,15 @@ def fetch_article_content(url):
     except:
         return ""
 
-# ✅ GPT structuring
+# ✅ GPT Extractor
 def gpt_extract(entry_text):
     prompt = f"""
-You're a regulatory analyst. Extract the following structured information:
+You're a regulatory analyst. Extract the following information:
 
 Text:
 {entry_text[:4000]}
 
-Return in this format:
+Return this format:
 Title:
 Jurisdiction:
 Published Date:
@@ -65,14 +65,27 @@ Summary (2–3 lines):
         )
         return response['choices'][0]['message']['content'].strip()
     except Exception as e:
-        return "GPT parse failed."
+        return f"GPT parse failed: {e}"
 
 # ✅ Streamlit UI
 st.set_page_config(page_title="PaymentsRegIQ", layout="wide")
-st.title("📡 PaymentsRegIQ – Structured Regulatory Feed")
+st.title("📡 PaymentsRegIQ – Structured Regulatory Intelligence")
 
-all_entries = []
-with st.spinner("Fetching and analyzing authoritative sources..."):
+# ✅ GPT Connection Test
+st.markdown("### 🔁 Testing OpenAI connection...")
+try:
+    _ = openai.ChatCompletion.create(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "Summarize CBDC in one sentence."}]
+    )
+    st.success("✅ OpenAI is working.")
+except Exception as e:
+    st.error(f"❌ OpenAI connection failed: {e}")
+    st.stop()
+
+# ✅ Fetch & Process Feeds
+with st.spinner("Fetching regulatory data and analyzing..."):
+    entries = []
     for jurisdiction, url in RSS_FEEDS.items():
         feed = feedparser.parse(url)
         for entry in feed.entries:
@@ -80,12 +93,13 @@ with st.spinner("Fetching and analyzing authoritative sources..."):
             summary = entry.get("summary", "")
             link = entry.get("link", "")
             published = entry.get("published", "")
-            text = fetch_article_content(link) or summary
-            if not any(k.lower() in (title + summary + text).lower() for k in KEYWORDS):
+            full_text = fetch_article_content(link) or summary
+            if not any(k.lower() in (title + full_text).lower() for k in KEYWORDS):
                 continue
-            topic = classify_topic(title + " " + text)
-            structured = gpt_extract(title + "\n" + text)
-            all_entries.append({
+            topic = classify_topic(title + " " + full_text)
+            structured = gpt_extract(title + "\n" + full_text)
+
+            entries.append({
                 "Jurisdiction": jurisdiction,
                 "Title": title,
                 "Regulatory Type": topic,
@@ -94,13 +108,15 @@ with st.spinner("Fetching and analyzing authoritative sources..."):
                 "Link": link
             })
 
-df = pd.DataFrame(all_entries).drop_duplicates(subset=["Title", "Link"])
+# ✅ Convert to DataFrame
+df = pd.DataFrame(entries).drop_duplicates(subset=["Title", "Link"])
 
-# ✅ Filters
-st.sidebar.header("🔎 Filters")
+# ✅ Sidebar Filters
+st.sidebar.header("🔎 Filter Results")
 types = st.sidebar.multiselect("Regulatory Type", df["Regulatory Type"].unique(), default=list(df["Regulatory Type"].unique()))
 juris = st.sidebar.multiselect("Jurisdiction", df["Jurisdiction"].unique(), default=list(df["Jurisdiction"].unique()))
 filtered = df[df["Regulatory Type"].isin(types) & df["Jurisdiction"].isin(juris)]
 
-st.markdown(f"### {len(filtered)} regulatory updates found")
+# ✅ Display Final Results
+st.markdown(f"### {len(filtered)} results matched")
 st.dataframe(filtered, use_container_width=True)
