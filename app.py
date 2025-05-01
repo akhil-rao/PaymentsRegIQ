@@ -4,33 +4,39 @@ import pandas as pd
 from datetime import datetime
 import requests
 from bs4 import BeautifulSoup
-import openai
+from openai import OpenAI
 
-# ✅ Secure OpenAI Key from Streamlit Secrets
-openai.api_key = st.secrets["OPENAI_API_KEY"]
+# ✅ Load OpenAI key from Streamlit secrets
+client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 
-# ✅ Authoritative Regulatory Feeds
+# ✅ Authoritative regulatory RSS feeds
 RSS_FEEDS = {
     "BIS": "https://www.bis.org/doclist/all_pressrels.rss",
     "MAS": "https://www.mas.gov.sg/rss/NewsReleases.xml",
     "Fed": "https://www.federalreserve.gov/feeds/press_all.xml"
 }
 
-# ✅ Keywords to Match
+# ✅ Keywords to match relevant news
 KEYWORDS = ["CBDC", "ISO 20022", "Sanctions", "Stablecoin", "Payments", "AML", "KYC"]
 
-# ✅ Classifier
+# ✅ Classify regulatory topic
 def classify_topic(text):
     t = text.lower()
-    if "iso 20022" in t: return "ISO 20022"
-    if "cbdc" in t or "central bank digital currency" in t: return "CBDC"
-    if "stablecoin" in t: return "Stablecoin"
-    if "aml" in t or "kyc" in t: return "AML/KYC"
-    if "sanction" in t: return "Sanctions"
-    if "payment" in t: return "Payments"
+    if "iso 20022" in t:
+        return "ISO 20022"
+    elif "cbdc" in t or "central bank digital currency" in t:
+        return "CBDC"
+    elif "stablecoin" in t:
+        return "Stablecoin"
+    elif "aml" in t or "kyc" in t:
+        return "AML/KYC"
+    elif "sanction" in t:
+        return "Sanctions"
+    elif "payment" in t:
+        return "Payments"
     return "Other"
 
-# ✅ Fetch Article Body (fallback to summary)
+# ✅ Try to fetch full body of article
 def fetch_article_content(url):
     try:
         headers = {"User-Agent": "Mozilla/5.0"}
@@ -41,10 +47,10 @@ def fetch_article_content(url):
     except:
         return ""
 
-# ✅ GPT Extractor
+# ✅ Use GPT (v1 SDK) to extract structure
 def gpt_extract(entry_text):
     prompt = f"""
-You're a regulatory analyst. Extract the following information:
+You're a regulatory analyst. Extract the following structured information from the text below:
 
 Text:
 {entry_text[:4000]}
@@ -58,34 +64,34 @@ Regulatory Type:
 Summary (2–3 lines):
 """
     try:
-        response = openai.ChatCompletion.create(
+        response = client.chat.completions.create(
             model="gpt-3.5-turbo",
             messages=[{"role": "user", "content": prompt}],
             temperature=0.2
         )
-        return response['choices'][0]['message']['content'].strip()
+        return response.choices[0].message.content.strip()
     except Exception as e:
         return f"GPT parse failed: {e}"
 
-# ✅ Streamlit UI
+# ✅ Streamlit page config
 st.set_page_config(page_title="PaymentsRegIQ", layout="wide")
 st.title("📡 PaymentsRegIQ – Structured Regulatory Intelligence")
 
-# ✅ GPT Connection Test
-st.markdown("### 🔁 Testing OpenAI connection...")
+# ✅ GPT Test
+st.markdown("#### 🧠 Testing OpenAI connection...")
 try:
-    _ = openai.ChatCompletion.create(
+    _ = client.chat.completions.create(
         model="gpt-3.5-turbo",
         messages=[{"role": "user", "content": "Summarize CBDC in one sentence."}]
     )
-    st.success("✅ OpenAI is working.")
+    st.success("✅ OpenAI GPT is working.")
 except Exception as e:
-    st.error(f"❌ OpenAI connection failed: {e}")
+    st.error(f"❌ GPT connection failed: {e}")
     st.stop()
 
-# ✅ Fetch & Process Feeds
-with st.spinner("Fetching regulatory data and analyzing..."):
-    entries = []
+# ✅ Process Feeds
+with st.spinner("⏳ Fetching regulatory content from BIS, MAS, Fed..."):
+    records = []
     for jurisdiction, url in RSS_FEEDS.items():
         feed = feedparser.parse(url)
         for entry in feed.entries:
@@ -93,30 +99,33 @@ with st.spinner("Fetching regulatory data and analyzing..."):
             summary = entry.get("summary", "")
             link = entry.get("link", "")
             published = entry.get("published", "")
-            full_text = fetch_article_content(link) or summary
-            if not any(k.lower() in (title + full_text).lower() for k in KEYWORDS):
-                continue
-            topic = classify_topic(title + " " + full_text)
-            structured = gpt_extract(title + "\n" + full_text)
 
-            entries.append({
+            content = fetch_article_content(link) or summary
+            if not any(k.lower() in (title + content).lower() for k in KEYWORDS):
+                continue
+
+            classification = classify_topic(title + " " + content)
+            structured = gpt_extract(title + "\n" + content)
+
+            records.append({
                 "Jurisdiction": jurisdiction,
                 "Title": title,
-                "Regulatory Type": topic,
+                "Regulatory Type": classification,
                 "Published Date": published,
                 "Structured Summary": structured,
                 "Link": link
             })
 
-# ✅ Convert to DataFrame
-df = pd.DataFrame(entries).drop_duplicates(subset=["Title", "Link"])
+# ✅ Display
+df = pd.DataFrame(records).drop_duplicates(subset=["Title", "Link"])
 
-# ✅ Sidebar Filters
-st.sidebar.header("🔎 Filter Results")
-types = st.sidebar.multiselect("Regulatory Type", df["Regulatory Type"].unique(), default=list(df["Regulatory Type"].unique()))
-juris = st.sidebar.multiselect("Jurisdiction", df["Jurisdiction"].unique(), default=list(df["Jurisdiction"].unique()))
-filtered = df[df["Regulatory Type"].isin(types) & df["Jurisdiction"].isin(juris)]
+# ✅ Sidebar filters
+st.sidebar.header("🔍 Filter Feed")
+types = st.sidebar.multiselect("Regulatory Type", sorted(df["Regulatory Type"].unique()), default=list(df["Regulatory Type"].unique()))
+juris = st.sidebar.multiselect("Jurisdiction", sorted(df["Jurisdiction"].unique()), default=list(df["Jurisdiction"].unique()))
 
-# ✅ Display Final Results
-st.markdown(f"### {len(filtered)} results matched")
-st.dataframe(filtered, use_container_width=True)
+filtered_df = df[df["Regulatory Type"].isin(types) & df["Jurisdiction"].isin(juris)]
+
+# ✅ Final Output
+st.markdown(f"### {len(filtered_df)} results")
+st.dataframe(filtered_df, use_container_width=True)
