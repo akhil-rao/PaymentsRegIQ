@@ -3,6 +3,6 @@ requests
 beautifulsoup4
 pandas
 feedparser
-openai
+openai>=1.0.0
 pdfplumber
 python-dotenv
