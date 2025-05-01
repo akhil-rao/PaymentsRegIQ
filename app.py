@@ -100,6 +100,10 @@ st.title("🌐 PaymentsRegIQ - Regulatory Feed for Payments Industry")
 st.markdown("Auto-collated updates across CBDC, ISO 20022, cards, and instant payments.")
 
 df = get_all_data()
+
+# 🔍 TEMP DEBUG: Show raw data before filters
+st.write("🔍 Debug Preview:", df.head())
+
 jurisdictions = st.sidebar.multiselect("Filter by Jurisdiction", df["Jurisdiction"].unique(), default=list(df["Jurisdiction"].unique()))
 reg_types = st.sidebar.multiselect("Filter by Regulatory Type", df["Regulatory Type"].unique(), default=list(df["Regulatory Type"].unique()))
 filtered_df = df[df["Jurisdiction"].isin(jurisdictions) & df["Regulatory Type"].isin(reg_types)]
